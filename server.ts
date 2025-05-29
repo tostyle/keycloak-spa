@@ -13,6 +13,7 @@ dotenv.config();
 
 const PORT = process.env.PORT || 4001;
 
+const isProduction = process.env.NODE_ENV === "production";
 // Middleware to check if user is authenticated
 function isAuthenticated(
   req: Request,
@@ -151,36 +152,30 @@ async function startServer(): Promise<Express> {
   app.use(vite.middlewares);
 
   // Serve static assets from dist in production
-  if (process.env.NODE_ENV === "production") {
+  if (isProduction) {
     app.use(express.static(path.resolve(__dirname, "dist")));
-
-    app.all("*path", (_req: Request, res: Response) => {
-      res.sendFile(path.resolve(__dirname, "dist", "index.html"));
-    });
-  } else {
-    // In development, serve the index.html file from Vite
-    app.all(
-      "*path",
-      async (req: Request, res: Response, next: NextFunction) => {
-        // Let Vite handle HTML requests
-        try {
-          const url = req.originalUrl;
-          console.log("Handling request for:", url);
-
-          // Read index.html
-          let template = await vite.transformIndexHtml(
-            url,
-            fs.readFileSync(path.resolve(__dirname, "index.html"), "utf-8")
-          );
-
-          res.status(200).set({ "Content-Type": "text/html" }).end(template);
-        } catch (e) {
-          console.error("Error handling request:", e);
-          next(e);
-        }
-      }
-    );
   }
+  app.all("*path", async (req: Request, res: Response, next: NextFunction) => {
+    // Let Vite handle HTML requests
+    try {
+      const url = req.originalUrl;
+      console.log("Handling request for:", url);
+
+      // Read index.html
+      const filePath = isProduction
+        ? path.resolve(__dirname, "dist", "index.html")
+        : path.resolve(__dirname, "index.html");
+      let template = await vite.transformIndexHtml(
+        url,
+        fs.readFileSync(filePath, "utf-8")
+      );
+
+      res.status(200).set({ "Content-Type": "text/html" }).end(template);
+    } catch (e) {
+      console.error("Error handling request:", e);
+      next(e);
+    }
+  });
 
   // Start server
   app.listen(PORT, () => {

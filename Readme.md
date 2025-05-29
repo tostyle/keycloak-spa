@@ -100,7 +100,7 @@ This will:
 pnpm run build
 
 # Start production server
-pnpm start
+pnpm start:prod
 ```
 
 ## Authentication Flow

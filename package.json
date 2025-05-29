@@ -5,12 +5,10 @@
   "main": "server.ts",
   "scripts": {
     "dev": "vite",
-    "build": "vite build && tsc",
+    "build": "vite build",
     "preview": "vite preview",
-    "test": "echo \"Error: no test specified\" && exit 1",
-    "start": "node dist/server.js",
+    "start:prod": "bun run server.ts",
     "start:dev": "bun --watch server.ts",
-    "tsc": "tsc",
     "clean": "rm -rf dist"
   },
   "keywords": [],
