@@ -8,6 +8,8 @@ import fs from "fs";
 import { createServer as createViteServer } from "vite";
 import dotenv from "dotenv";
 import { UserProfile } from "./server/types"; // Adjust the import path as necessary
+import marketingRoutes from "server/modules/marketing";
+import { getPermissions } from "server/permission";
 
 dotenv.config();
 
@@ -120,6 +122,7 @@ async function startServer(): Promise<Express> {
       user: req.user,
     });
   });
+  app.get("/permissions", isAuthenticated, getPermissions);
 
   // Token route - to easily access tokens for frontend use
   app.get("/api/tokens", isAuthenticated, (req: Request, res: Response) => {
@@ -148,6 +151,7 @@ async function startServer(): Promise<Express> {
     });
   });
 
+  app.use("/marketing", marketingRoutes);
   // Use vite's connect instance as middleware
   app.use(vite.middlewares);
 
