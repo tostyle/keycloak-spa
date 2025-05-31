@@ -9,7 +9,14 @@
     "preview": "vite preview",
     "start:prod": "bun run server.ts",
     "start:dev": "bun --watch server.ts",
-    "clean": "rm -rf dist"
+    "clean": "rm -rf dist",
+    "docker:build": "docker build -t keycloak-spa:latest .",
+    "docker:run": "docker run -p 4001:4001 --env-file .env keycloak-spa:latest",
+    "helm:lint": "helm lint helm/keycloak-spa",
+    "helm:template": "helm template keycloak-spa helm/keycloak-spa",
+    "helm:install": "helm install keycloak-spa helm/keycloak-spa",
+    "helm:upgrade": "helm upgrade keycloak-spa helm/keycloak-spa",
+    "helm:uninstall": "helm uninstall keycloak-spa"
   },
   "keywords": [],
   "author": "",

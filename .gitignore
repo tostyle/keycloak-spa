@@ -2,3 +2,5 @@
 dist/
 main.js
 node_modules/
+helm/keycloak-spa/values*.yaml
+helm/**/*.tgz

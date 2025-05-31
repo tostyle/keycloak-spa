@@ -30,12 +30,7 @@ function isAuthenticated(
 
 async function startServer(): Promise<Express> {
   const app = express();
-  // Create Vite server in middleware mode
-  const vite = await createViteServer({
-    server: { middlewareMode: true },
-    appType: "spa",
-    configFile: path.resolve(__dirname, "vite.config.js"),
-  });
+
 
   // Middleware
   app.use(express.json());
@@ -151,9 +146,40 @@ async function startServer(): Promise<Express> {
     });
   });
 
+  // Health check endpoints for Kubernetes probes
+  app.get("/health", (req: Request, res: Response) => {
+    // Liveness probe - check if the application is running
+    res.status(200).json({
+      status: "healthy",
+      timestamp: new Date().toISOString(),
+      uptime: process.uptime(),
+    });
+  });
+
+  app.get("/ready", (req: Request, res: Response) => {
+    // Readiness probe - check if the application is ready to serve traffic
+    // You can add more sophisticated checks here (database connectivity, etc.)
+    res.status(200).json({
+      status: "ready",
+      timestamp: new Date().toISOString(),
+      checks: {
+        server: "ok",
+        // Add more checks as needed
+      },
+    });
+  });
+
   app.use("/marketing", marketingRoutes);
   // Use vite's connect instance as middleware
-  app.use(vite.middlewares);
+  if (!isProduction) {
+    // Create Vite server in middleware mode
+    const vite = await createViteServer({
+      server: { middlewareMode: true },
+      appType: "spa",
+      configFile: path.resolve(__dirname, "vite.config.ts"),
+    });
+    app.use(vite.middlewares);
+  }
 
   // Serve static assets from dist in production
   if (isProduction) {
@@ -169,6 +195,12 @@ async function startServer(): Promise<Express> {
       const filePath = isProduction
         ? path.resolve(__dirname, "dist", "index.html")
         : path.resolve(__dirname, "index.html");
+
+      if (isProduction) {
+        const html = fs.readFileSync(filePath, "utf-8");
+        res.status(200).set({ "Content-Type": "text/html" }).end(html);
+        return;
+      }
       let template = await vite.transformIndexHtml(
         url,
         fs.readFileSync(filePath, "utf-8")
