@@ -170,14 +170,15 @@ async function startServer(): Promise<Express> {
   });
 
   app.use("/marketing", marketingRoutes);
-  // Use vite's connect instance as middleware
-  if (!isProduction) {
-    // Create Vite server in middleware mode
-    const vite = await createViteServer({
+
+  // Create Vite server in middleware mode
+  const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: "spa",
       configFile: path.resolve(__dirname, "vite.config.ts"),
     });
+  // Use vite's connect instance as middleware
+  if (!isProduction) {
     app.use(vite.middlewares);
   }
 
