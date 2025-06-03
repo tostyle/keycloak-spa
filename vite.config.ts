@@ -16,12 +16,12 @@ export default defineConfig({
       "@": path.resolve(__dirname, "./src"),
     },
   },
-  server: {
-    port: 3000,
-    proxy: {
-      "/api": "http://localhost:4001",
-      "/auth": "http://localhost:4001",
-      "/profile": "http://localhost:4001",
-    },
-  },
+  // server: {
+  //   port: 3000,
+  //   proxy: {
+  //     "/api": "http://localhost:4001",
+  //     "/auth": "http://localhost:4001",
+  //     "/profile": "http://localhost:4001",
+  //   },
+  // },
 });

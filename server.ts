@@ -9,7 +9,16 @@ import { createServer as createViteServer } from "vite";
 import dotenv from "dotenv";
 import { UserProfile } from "./server/types"; // Adjust the import path as necessary
 import marketingRoutes from "server/modules/marketing";
-import { getPermissions } from "server/permission";
+import { checkPermission, getPermissions } from "server/permission";
+
+// Extend Express session to include passport
+declare module "express-session" {
+  interface SessionData {
+    passport?: {
+      user?: any;
+    };
+  }
+}
 
 dotenv.config();
 
@@ -22,8 +31,15 @@ function isAuthenticated(
   res: Response,
   next: NextFunction
 ): void {
+  console.log("Checking authentication for request:", req.originalUrl);
+  console.log("Is user authenticated?", req.isAuthenticated());
   if (req.isAuthenticated()) {
     return next();
+  }
+  const user = req.user as UserProfile;
+  if (!user) {
+    res.status(401).json({ error: "Unauthorized" });
+    return;
   }
   res.status(401).json({ message: "Unauthorized" });
 }
@@ -31,6 +47,14 @@ function isAuthenticated(
 async function startServer(): Promise<Express> {
   const app = express();
 
+  // Trust proxy when behind reverse proxy/load balancer
+  // app.set("trust proxy", 1);
+
+  const vite = await createViteServer({
+    server: { middlewareMode: true },
+    appType: "spa",
+    configFile: path.resolve(__dirname, "vite.config.ts"),
+  });
 
   // Middleware
   app.use(express.json());
@@ -40,10 +64,16 @@ async function startServer(): Promise<Express> {
   // Session configuration
   app.use(
     session({
-      secret: process.env.SESSION_SECRET || "",
+      secret: process.env.SESSION_SECRET || "fallback-secret-key",
       resave: false,
-      saveUninitialized: true,
-      cookie: { secure: process.env.NODE_ENV === "production" },
+      saveUninitialized: false, // Changed to false to prevent unnecessary sessions
+      name: "sessionId", // Custom session name
+      cookie: {
+        secure: isProduction && process.env.SECURE_COOKIES !== "false",
+        httpOnly: true,
+        maxAge: 24 * 60 * 60 * 1000, // 24 hours
+        sameSite: isProduction ? "none" : "lax", // Allow cross-site cookies in production
+      },
     })
   );
 
@@ -64,6 +94,8 @@ async function startServer(): Promise<Express> {
         clientSecret: process.env.OIDC_CLIENT_SECRET || "",
         callbackURL: process.env.OIDC_CALLBACK_URL || "",
         scope: ["openid", "profile", "email"],
+        skipUserProfile: false, // Ensure we get user profile
+        passReqToCallback: false,
       },
       (
         _issuer: string,
@@ -74,9 +106,14 @@ async function startServer(): Promise<Express> {
         refreshToken: string,
         done: Function
       ) => {
-        console.log("OIDC accessToken:", accessToken);
-        console.log("OIDC refreshToken:", refreshToken);
-        console.log("OIDC idToken:", idToken);
+        console.log("OIDC Strategy called successfully");
+        console.log(
+          "Profile received:",
+          profile.displayName || profile.username
+        );
+        console.log("OIDC accessToken:", typeof accessToken);
+        console.log("OIDC refreshToken:", typeof refreshToken);
+        console.log("OIDC idToken:", typeof idToken);
 
         profile.accessToken = accessToken as string;
         profile.idToken = idToken as string;
@@ -98,16 +135,67 @@ async function startServer(): Promise<Express> {
 
   // Routes
 
-  // Login route
-  app.get("/auth/login", passport.authenticate("oidc"));
+  // Debug route to check session and auth state
+  app.get("/auth/debug", (req: Request, res: Response) => {
+    res.json({
+      isAuthenticated: req.isAuthenticated(),
+      sessionID: req.sessionID,
+      user: req.user ? "User exists" : "No user",
+      session: {
+        passport: req.session.passport
+          ? "Passport session exists"
+          : "No passport session",
+      },
+    });
+  });
 
-  // Callback route
+  // Login route with error handling
+  app.get("/auth/login", (req: Request, res: Response, next: NextFunction) => {
+    console.log("Login attempt, session ID:", req.sessionID);
+    console.log("Is already authenticated:", req.isAuthenticated());
+
+    if (req.isAuthenticated()) {
+      console.log("User already authenticated, redirecting to /admin");
+      return res.redirect("/admin");
+    }
+
+    passport.authenticate("oidc", {
+      scope: ["openid", "profile", "email"],
+    })(req, res, next);
+  });
+
+  // Callback route with better error handling
   app.get(
     "/auth/callback",
-    passport.authenticate("oidc", {
-      successRedirect: "/admin",
-      failureRedirect: "/auth/login",
-    })
+    (req: Request, res: Response, next: NextFunction) => {
+      console.log("Auth callback received, session ID:", req.sessionID);
+      console.log("Query params:", req.query);
+
+      passport.authenticate("oidc", (err: any, user: any, info: any) => {
+        if (err) {
+          console.error("Authentication error:", err);
+          return res.redirect("/auth/login?error=auth_failed");
+        }
+
+        if (!user) {
+          console.error("No user returned from authentication:", info);
+          return res.redirect("/auth/login?error=no_user");
+        }
+
+        req.logIn(user, (loginErr: any) => {
+          if (loginErr) {
+            console.error("Login error:", loginErr);
+            return res.redirect("/auth/login?error=login_failed");
+          }
+
+          console.log(
+            "User successfully authenticated:",
+            user.displayName || user.username
+          );
+          return res.redirect("/admin");
+        });
+      })(req, res, next);
+    }
   );
 
   // Profile route (protected)
@@ -118,6 +206,7 @@ async function startServer(): Promise<Express> {
     });
   });
   app.get("/permissions", isAuthenticated, getPermissions);
+  app.get("/permissions/:resource/:scope", isAuthenticated, checkPermission);
 
   // Token route - to easily access tokens for frontend use
   app.get("/api/tokens", isAuthenticated, (req: Request, res: Response) => {
@@ -138,12 +227,39 @@ async function startServer(): Promise<Express> {
 
   // Logout route
   app.get("/auth/logout", (req: Request, res: Response, next: NextFunction) => {
+    const logoutUrl = process.env.OIDC_LOGOUT_URL;
+    const redirectUri = process.env.OIDC_LOGOUT_REDIRECT_URI;
+
+    const user = req.user as UserProfile;
     req.logout((err) => {
       if (err) {
+        console.error("Logout error:", err);
         return next(err);
       }
-      res.redirect("/");
+
+      // Destroy session
+      req.session.destroy((sessionErr) => {
+        if (sessionErr) {
+          console.error("Session destroy error:", sessionErr);
+        }
+
+        // Redirect to Keycloak logout if configured
+        if (logoutUrl && redirectUri) {
+          const keycloakLogoutUrl = `${logoutUrl}?post_logout_redirect_uri=${encodeURIComponent(
+            redirectUri
+          )}&id_token_hint=${user?.idToken}`;
+          res.redirect(keycloakLogoutUrl);
+        } else {
+          res.redirect("/");
+        }
+      });
     });
+  });
+
+  // Logout callback route for Keycloak
+  app.get("/auth/logout/callback", (req: Request, res: Response) => {
+    console.log("Logout callback received");
+    res.redirect("/");
   });
 
   // Health check endpoints for Kubernetes probes
@@ -172,13 +288,10 @@ async function startServer(): Promise<Express> {
   app.use("/marketing", marketingRoutes);
 
   // Create Vite server in middleware mode
-  const vite = await createViteServer({
-      server: { middlewareMode: true },
-      appType: "spa",
-      configFile: path.resolve(__dirname, "vite.config.ts"),
-    });
+
   // Use vite's connect instance as middleware
   if (!isProduction) {
+    console.log("Using Vite middleware in development mode");
     app.use(vite.middlewares);
   }
 
@@ -214,6 +327,13 @@ async function startServer(): Promise<Express> {
     }
   });
 
+  app.use((err: any, req: Request, res: Response, next: NextFunction) => {
+    console.error("Express error handler:", err);
+    res.status(err.status || 500).json({
+      message: err.message || "Internal Server Error",
+      error: isProduction ? undefined : err.stack,
+    });
+  });
   // Start server
   app.listen(PORT, () => {
     console.log(`Server is running on port ${PORT}`);
